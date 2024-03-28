@@ -15,7 +15,8 @@ struct Client {
 // TODO: implement cleanup of FIFOs
 
 pub fn start_manager() {
-    let mut control_fifo = Fifo::new(QCM_CONTROL_FIFO, MIO_QCM_CONTROL);
+    let mut control_fifo = Fifo::new(QCM_CONTROL_FIFO, MIO_QCM_CONTROL)
+        .unwrap();
     let mut clients: Vec<Client> = Vec::new();
     let mut events = mio::Events::with_capacity(1024);
     let mut poll = mio::Poll::new().unwrap();
@@ -59,7 +60,7 @@ fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
     let pidstr = fields.get(2).unwrap();
     let fifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr;
     let client = Client{
-        fifo: Fifo::new(fifoname.as_str(), tokenmanager.allocate_token()),
+        fifo: Fifo::new(fifoname.as_str(), tokenmanager.allocate_token()).unwrap(),
         pid: pidstr.parse::<u32>().unwrap(),
      };
      client.fifo.write(String::from_str("OK").unwrap()).unwrap();
