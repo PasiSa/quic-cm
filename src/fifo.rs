@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::str::FromStr;
 
 use mio::Token;
@@ -64,6 +64,12 @@ impl Fifo {
         let mut fifo = &self.file;
         writeln!(fifo, "{}", str)?;
         Ok(())
+    }
+
+
+    /// Removes the FIFO file. Note that the FIFO is unusable after this.
+    pub fn cleanup(&self) {
+        fs::remove_file(&self.pathname).unwrap();
     }
 
 

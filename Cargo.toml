@@ -7,8 +7,9 @@ default-run = "quic-cm"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-quiche = { version = "0.20.1", features = ["qlog"] }
 env_logger = "0.10"
-mio = { version = "0.8", features = ["net", "os-poll", "os-ext"] }
-nix = "0.23"
 log = "0.4"
+mio = { version = "0.8", features = ["net", "os-poll", "os-ext"] }
+mio-signals = "0.2"
+nix = "0.23"
+quiche = { version = "0.20.1", features = ["qlog"] }

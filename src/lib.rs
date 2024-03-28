@@ -3,7 +3,7 @@ extern crate log;
 
 use mio::Token;
 
-use crate::common::{QCM_CONTROL_FIFO, QCM_CLIENT_FIFO, MIO_QCM_CONTROL};
+use crate::common::{QCM_CONTROL_FIFO, QCM_CLIENT_FIFO};
 use crate::fifo::Fifo;
 
 /// Initiate QUIC connection to given address
@@ -16,7 +16,7 @@ pub fn connect(address: &str) -> Result<(), String> {
         return Err(format!("Creating client fifo failed: {}", client_fifo.err().unwrap()));
     }
 
-    let control_fifo = Fifo::connect(QCM_CONTROL_FIFO, MIO_QCM_CONTROL);
+    let control_fifo = Fifo::connect(QCM_CONTROL_FIFO, Token(1));
     if control_fifo.is_err() {
         return Err(format!("Connecting control fifo failed: {}", control_fifo.err().unwrap()));
     }

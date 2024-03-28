@@ -1,40 +1,58 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use mio::unix::SourceFd;
 use mio::{Interest, Token};
+use mio::unix::SourceFd;
+use mio_signals::{Signals, SignalSet, Signal};
 
-use crate::common::{MIO_QCM_CONTROL, QCM_CLIENT_FIFO, QCM_CONTROL_FIFO};
+use crate::common::{QCM_CLIENT_FIFO, QCM_CONTROL_FIFO};
 use crate::fifo::Fifo;
 
 struct Client {
     fifo: Fifo,
-    pid: u32,
 }
 
-// TODO: implement cleanup of FIFOs
 
 pub fn start_manager() {
-    let mut control_fifo = Fifo::new(QCM_CONTROL_FIFO, MIO_QCM_CONTROL)
+    let mut tokenmanager: TokenManager = TokenManager::new();
+    let mut control_fifo = Fifo::new(QCM_CONTROL_FIFO, tokenmanager.allocate_token())
         .unwrap();
     let mut clients: Vec<Client> = Vec::new();
     let mut events = mio::Events::with_capacity(1024);
     let mut poll = mio::Poll::new().unwrap();
-    let mut tokenmanager: TokenManager = TokenManager::new();
-    
+    let sigset: SignalSet = Signal::Interrupt | Signal::Terminate;
+    let mut signals = Signals::new(sigset).unwrap();
+    let signal_token = tokenmanager.allocate_token();
+
     let fd = control_fifo.get_fd();
     poll.registry()
-        .register(&mut SourceFd(&fd), MIO_QCM_CONTROL, Interest::READABLE)
+        .register(&mut SourceFd(&fd), control_fifo.get_token(), Interest::READABLE)
         .unwrap();
 
-    loop {
+    poll.registry()
+        .register(&mut signals, signal_token, Interest::READABLE)
+        .unwrap();
+
+    let mut terminate = false;
+    while !terminate {
         poll.poll(&mut events, None).unwrap();
         for event in &events {
+            if event.token() == signal_token {
+                debug!("Signal received");
+                terminate = true;
+            }
             if event.token() == control_fifo.get_token() {
                 process_control_fifo(&mut control_fifo, &mut clients, &mut tokenmanager);
             }
         }
     }
+
+    for c in clients.iter() {
+        tokenmanager.free_token(c.fifo.get_token());
+        c.fifo.cleanup();
+    }
+    tokenmanager.free_token(control_fifo.get_token());
+    control_fifo.cleanup();
 }
 
 
@@ -61,7 +79,6 @@ fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
     let fifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr;
     let client = Client{
         fifo: Fifo::new(fifoname.as_str(), tokenmanager.allocate_token()).unwrap(),
-        pid: pidstr.parse::<u32>().unwrap(),
      };
      client.fifo.write(String::from_str("OK").unwrap()).unwrap();
      clients.push(client);
