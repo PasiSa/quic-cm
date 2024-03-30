@@ -1,0 +1,7 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "./lib/Cargo.toml",
+        "./quic-cm-lib/Cargo.toml",
+        "./quic-cm-manager/Cargo.toml",
+    ]
+}

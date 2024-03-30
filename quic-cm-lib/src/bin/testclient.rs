@@ -1,4 +1,4 @@
-use quic_cm::connect;
+use quic_cm_lib::connect;
 
 
 fn main() {

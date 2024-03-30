@@ -1,0 +1,17 @@
+[package]
+name = "quic-cm-manager"
+version = "0.1.0"
+edition = "2021"
+default-run = "quic-cm-manager"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+env_logger = "0.10"
+log = "0.4"
+mio = { version = "0.8", features = ["net", "os-poll", "os-ext"] }
+mio-signals = "0.2"
+nix = "0.23"
+quiche = { version = "0.20.1", features = ["qlog"] }
+ring = "< 0.17.8"
+quic-cm-lib = { path = "../quic-cm-lib" }

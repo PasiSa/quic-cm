@@ -4,9 +4,10 @@ use mio::{Interest, Poll};
 use mio::unix::SourceFd;
 use mio_signals::{Signals, SignalSet, Signal};
 
-use crate::common::{QCM_CLIENT_FIFO, QCM_CONTROL_FIFO};
+use quic_cm_lib::common::{QCM_CLIENT_FIFO, QCM_CONTROL_FIFO};
+use quic_cm_lib::fifo::Fifo;
+
 use crate::connection::{Connection, State};
-use crate::fifo::Fifo;
 use crate::mio_tokens::TokenManager;
 
 struct Client {

@@ -9,8 +9,6 @@ fn main() {
     start_manager();
 }
 
-mod common;
 mod connection;
-pub mod fifo;
 mod manager;
 mod mio_tokens;
