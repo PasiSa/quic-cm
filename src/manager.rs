@@ -1,15 +1,18 @@
-use std::collections::HashSet;
 use std::str::FromStr;
 
-use mio::{Interest, Token};
+use mio::{Interest, Poll};
 use mio::unix::SourceFd;
 use mio_signals::{Signals, SignalSet, Signal};
 
 use crate::common::{QCM_CLIENT_FIFO, QCM_CONTROL_FIFO};
+use crate::connection::{Connection, State};
 use crate::fifo::Fifo;
+use crate::mio_tokens::TokenManager;
 
 struct Client {
     fifo: Fifo,
+    connection: Connection,
+    established: bool,
 }
 
 
@@ -42,7 +45,23 @@ pub fn start_manager() {
                 terminate = true;
             }
             if event.token() == control_fifo.get_token() {
-                process_control_fifo(&mut control_fifo, &mut clients, &mut tokenmanager);
+                process_control_fifo(&mut control_fifo, &mut clients,
+                                    &mut tokenmanager, &mut poll);
+            }
+            for client in &mut clients {
+                if event.token() == client.connection.get_token() {
+                    debug!("Socket message received");
+                    // TODO: error handling
+                    client.connection.process_datagram();
+                }
+                if let State::Established = client.connection.get_state() {
+                    if !client.established {
+                        // Inform client that connection has just been established.
+                        client.established = true;
+                        client.fifo.write(String::from_str("OK").unwrap()).unwrap();
+                    }
+                }
+                client.connection.send_data();
             }
         }
     }
@@ -61,63 +80,24 @@ pub fn start_manager() {
 /// As a result, a client-specific FIFO is created, and QUIC connection is created
 /// Outcome is reported back in client-specific FIFO.
 fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
-                        tokenmanager: &mut TokenManager) {
+                        tokenmanager: &mut TokenManager, poll: &mut Poll) {
     let mut buf = [0; 65535];
     fifo.read(&mut buf).unwrap();
     debug!("Read: {}", std::str::from_utf8(&buf).unwrap());
     let str = std::str::from_utf8(&buf).unwrap();
     let fields: Vec<&str> = str.split_whitespace().collect();
-    if let Some(second_field) = fields.get(1) {
-        debug!("The second field is: {}", second_field);
-    } else {
-        debug!("The second field does not exist.");
-    }
+    let address = fields.get(1).unwrap();
+
     // TODO: error handling
-    
+
     // create client FIFO
     let pidstr = fields.get(2).unwrap();
     let fifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr;
     let client = Client{
         fifo: Fifo::new(fifoname.as_str(), tokenmanager.allocate_token()).unwrap(),
+        connection: Connection::new(address, tokenmanager, poll),
+        established: false,
      };
-     client.fifo.write(String::from_str("OK").unwrap()).unwrap();
+
      clients.push(client);
-
-    // TODO: Start QUIC connection
-
-}
-
-
-struct TokenManager {
-    used_tokens: HashSet<Token>,
-    free_tokens: Vec<Token>,
-    next: usize,
-}
-
-impl TokenManager {
-    fn new() -> TokenManager {
-        TokenManager {
-            used_tokens: HashSet::new(),
-            free_tokens: Vec::new(),
-            next: 0,
-        }
-    }
-
-    fn allocate_token(&mut self) -> Token {
-        if let Some(token) = self.free_tokens.pop() {
-            self.used_tokens.insert(token);
-            token
-        } else {
-            let token = Token(self.next);
-            self.next += 1;
-            self.used_tokens.insert(token);
-            token
-        }
-    }
-
-    fn free_token(&mut self, token: Token) {
-        if self.used_tokens.remove(&token) {
-            self.free_tokens.push(token);
-        }
-    }
 }
