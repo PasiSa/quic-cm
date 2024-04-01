@@ -58,12 +58,9 @@ impl Fifo {
 
 
     /// Write string to the FIFO.
-    /// TODO: may need to be converted into u8 to support binary data.
-    /// TODO: should return how many bytes were written.
-    pub fn write(&self, str: String) -> io::Result<()> {
+    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
         let mut fifo = &self.file;
-        writeln!(fifo, "{}", str)?;
-        Ok(())
+        fifo.write(buf)
     }
 
 

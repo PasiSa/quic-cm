@@ -2,6 +2,7 @@ use std::net::ToSocketAddrs;
 
 use mio::{Interest, Poll, Token};
 use mio::net::UdpSocket;
+use quic_cm_lib::fifo::Fifo;
 use ring::rand::*;
 use quiche::Config;
 
@@ -62,7 +63,7 @@ impl Connection {
 
             error!("send() failed: {:?}", e);
         }
-        debug!("written {}", write);
+        debug!("connecting, written {} bytes", write);
 
         let token = tokenmanager.allocate_token();
         poll.registry()
@@ -89,14 +90,12 @@ impl Connection {
                     // There are no more UDP packets to read, so end the read
                     // loop.
                     if e.kind() == std::io::ErrorKind::WouldBlock {
-                        debug!("recv() would block");
                         break;
                     }
 
                     panic!("recv() failed: {:?}", e);
                 },
             };
-            debug!("got {} bytes", len);
 
             let recv_info = quiche::RecvInfo {
                 to: self.socket.local_addr().unwrap(),
@@ -113,7 +112,7 @@ impl Connection {
                 },
             };
 
-            debug!("processed {} bytes", read);
+            debug!("processed from socket {} bytes", read);
         }
         if self.qconn.is_closed() {
             self.state = State::Closed;
@@ -136,11 +135,7 @@ impl Connection {
         loop {
             let (write, send_info) = match self.qconn.send(&mut out) {
                 Ok(v) => v,
-
-                Err(quiche::Error::Done) => {
-                    debug!("done writing");
-                    break;
-                },
+                Err(quiche::Error::Done) => break,
                 Err(e) => {
                     error!("send failed: {:?}", e);
 
@@ -150,15 +145,39 @@ impl Connection {
             };
             if let Err(e) = self.socket.send_to(&out[..write], send_info.to) {
                 if e.kind() == std::io::ErrorKind::WouldBlock {
-                    println!("send() would block");
                     break;
                 }
-
                 panic!("send() failed: {:?}", e);
             }
 
-            debug!("written {}", write);
+            debug!("written to socket {} bytes", write);
         }
+    }
+
+
+    pub fn send_from_fifo(&mut self, fifo: &mut Fifo) -> Result<usize, String> {
+        let mut buf = [0; 65535];
+        let n = match fifo.read(&mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                error!("Read from fifo failed: {}", e);
+                return Err(format!("Read from fifo failed: {}", e));
+            },
+        };
+        // TODO: check that the FIFO command is indeed "SEND". Develop decent parser
+        // function for commands.
+        if n < 4 {
+            return Err(format!("Too short message from Fifo: {} bytes", n));
+        }
+        let written = match self.qconn.stream_send(4, &buf[4..n], false) {
+            Ok(n) => n,
+            Err(quiche::Error::Done) => 0,
+            Err(e) => {
+                return Err(format!("{} stream send failed {:?}", self.qconn.trace_id(), e));
+            },
+        };
+        debug!("send_from_fifo wrote {} bytes", written);
+        Ok(written)
     }
 
 

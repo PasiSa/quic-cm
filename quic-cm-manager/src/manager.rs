@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use mio::{Interest, Poll};
 use mio::unix::SourceFd;
 use mio_signals::{Signals, SignalSet, Signal};
@@ -28,9 +26,9 @@ pub fn start_manager() {
     let mut signals = Signals::new(sigset).unwrap();
     let signal_token = tokenmanager.allocate_token();
 
-    let fd = control_fifo.get_fd();
     poll.registry()
-        .register(&mut SourceFd(&fd), control_fifo.get_token(), Interest::READABLE)
+        .register(&mut SourceFd(&control_fifo.get_fd()),
+                control_fifo.get_token(), Interest::READABLE)
         .unwrap();
 
     poll.registry()
@@ -50,8 +48,11 @@ pub fn start_manager() {
                                     &mut tokenmanager, &mut poll);
             }
             for client in &mut clients {
+                if event.token() == client.fifo.get_token() {
+                    debug!("Data to be sent from Fifo");
+                    client.connection.send_from_fifo(&mut client.fifo).unwrap();
+                }
                 if event.token() == client.connection.get_token() {
-                    debug!("Socket message received");
                     // TODO: error handling
                     client.connection.process_datagram();
                 }
@@ -59,7 +60,8 @@ pub fn start_manager() {
                     if !client.established {
                         // Inform client that connection has just been established.
                         client.established = true;
-                        client.fifo.write(String::from_str("OK").unwrap()).unwrap();
+                        let ok = *b"OK";
+                        client.fifo.write(&ok).unwrap();
                     }
                 }
                 client.connection.send_data();
@@ -84,8 +86,8 @@ fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
                         tokenmanager: &mut TokenManager, poll: &mut Poll) {
     let mut buf = [0; 65535];
     fifo.read(&mut buf).unwrap();
-    debug!("Read: {}", std::str::from_utf8(&buf).unwrap());
     let str = std::str::from_utf8(&buf).unwrap();
+    debug!("Read: '{}'", str);
     let fields: Vec<&str> = str.split_whitespace().collect();
     let address = fields.get(1).unwrap();
 
@@ -93,12 +95,19 @@ fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
 
     // create client FIFO
     let pidstr = fields.get(2).unwrap();
-    let fifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr;
+    let mut fifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr;
+
+    // The NUL terminator in string from FIFO seems to cause problems, remove it
+    fifoname = fifoname.replace("\0", "");
+    let fifo = Fifo::connect(fifoname.as_str(), tokenmanager.allocate_token()).unwrap();
+    poll.registry()
+        .register(&mut SourceFd(&fifo.get_fd()), fifo.get_token(), Interest::READABLE)
+        .unwrap();
+
     let client = Client{
-        fifo: Fifo::new(fifoname.as_str(), tokenmanager.allocate_token()).unwrap(),
+        fifo: fifo,
         connection: Connection::new(address, tokenmanager, poll),
         established: false,
      };
-
      clients.push(client);
 }
