@@ -64,6 +64,16 @@ impl Fifo {
     }
 
 
+    /// Write DATA header to Fifo with number of data bytes.
+    pub fn write_data_header(&self, length: u32) -> io::Result<usize> {
+        let mut header: [u8; 8] = [0; 8];
+        // write "DATA" type specified and u32 length information
+        header[..4].copy_from_slice("DATA".as_bytes());
+        header[4..].copy_from_slice(&length.to_be_bytes());
+        self.write(&header)
+    }
+
+
     /// Removes the FIFO file. Note that the FIFO is unusable after this.
     pub fn cleanup(&self) {
         fs::remove_file(&self.pathname).unwrap();

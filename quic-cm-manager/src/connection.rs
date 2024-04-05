@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 
 use mio::{Interest, Poll, Token};
@@ -21,6 +22,7 @@ pub struct Connection {
     mio_token: Token,
     qconn: quiche::Connection,
     state: State,
+    received_data: HashMap<u64, Vec<u8>>,
 }
 
 impl Connection {
@@ -75,6 +77,7 @@ impl Connection {
             mio_token: token,
             qconn: conn,
             state: State::Connecting,
+            received_data: HashMap::new(),
         }
     }
 
@@ -166,10 +169,10 @@ impl Connection {
         };
         // TODO: check that the FIFO command is indeed "SEND". Develop decent parser
         // function for commands.
-        if n < 4 {
+        if n < 8 {
             return Err(format!("Too short message from Fifo: {} bytes", n));
         }
-        let written = match self.qconn.stream_send(4, &buf[4..n], false) {
+        let written = match self.qconn.stream_send(4, &buf[8..n], false) {
             Ok(n) => n,
             Err(quiche::Error::Done) => 0,
             Err(e) => {
@@ -178,6 +181,28 @@ impl Connection {
         };
         debug!("send_from_fifo wrote {} bytes", written);
         Ok(written)
+    }
+
+
+    pub fn deliver_to_fifo(&mut self, fifo: &mut Fifo) -> Result<usize, String> {
+        // TODO: take stream ID as an attribute
+        let mut n = 0;
+        for stream in self.received_data.keys() {
+            let data = self.received_data.get(stream).unwrap();
+            let len: u32 = match self.received_data.len().try_into() {
+                Ok(v) => v,
+                Err(e) => return Err(format!("length conversion failed: {:?}", e)),
+            };
+            let header = fifo.write_data_header(len);
+            if header.is_err() {
+                return Err(format!("Writing header to Fifo failed: {}", header.err().unwrap()))
+            }
+            n = n + match fifo.write(&data) {
+                Ok(n) => n,
+                Err(e) => return Err(format!("Delivering to Fifo failed: {}", e)),
+            };
+        }
+        Ok(n)
     }
 
 
@@ -195,29 +220,24 @@ impl Connection {
         let mut buf = [0; 65535];
     
         // Process all readable streams.
-        for s in self.qconn.readable() {
+        for stream in self.qconn.readable() {
             while let Ok((read, fin)) =
-                self.qconn.stream_recv(s, &mut buf)
+                self.qconn.stream_recv(stream, &mut buf)
             {
-                debug!(
-                    "{} received {} bytes",
-                    self.qconn.trace_id(),
-                    read
-                );
-    
                 let stream_buf = &buf[..read];
-    
                 debug!(
                     "{} stream {} has {} bytes (fin? {})",
                     self.qconn.trace_id(),
-                    s,
+                    stream,
                     stream_buf.len(),
                     fin
                 );
 
-                let str = String::from_utf8(stream_buf.to_vec()).unwrap();
-                debug!("from stream {}: ", s);
-                print!("{}", str);
+                if !self.received_data.contains_key(&stream) {
+                    self.received_data.insert(stream, Vec::new());
+                }
+                let v = self.received_data.get_mut(&stream).unwrap();
+                v.append(&mut stream_buf.to_vec());
             }
         }
     }

@@ -9,7 +9,8 @@ use crate::connection::{Connection, State};
 use crate::mio_tokens::TokenManager;
 
 struct Client {
-    fifo: Fifo,
+    sendfifo: Fifo,
+    recvfifo: Fifo,
     connection: Connection,
     established: bool,
 }
@@ -48,20 +49,24 @@ pub fn start_manager() {
                                     &mut tokenmanager, &mut poll);
             }
             for client in &mut clients {
-                if event.token() == client.fifo.get_token() {
+                if event.token() == client.sendfifo.get_token() {
                     debug!("Data to be sent from Fifo");
-                    client.connection.send_from_fifo(&mut client.fifo).unwrap();
+                    client.connection.send_from_fifo(&mut client.sendfifo).unwrap();
+                    let ok = *b"OK";
+                    client.recvfifo.write(&ok).unwrap(); // TODO: fix error handling            
                 }
                 if event.token() == client.connection.get_token() {
                     // TODO: error handling
                     client.connection.process_datagram();
+                    // TODO: specify which streams we are interested in
+                    client.connection.deliver_to_fifo(&mut client.recvfifo).unwrap();
                 }
                 if let State::Established = client.connection.get_state() {
                     if !client.established {
                         // Inform client that connection has just been established.
                         client.established = true;
                         let ok = *b"OK";
-                        client.fifo.write(&ok).unwrap();
+                        client.recvfifo.write(&ok).unwrap();
                     }
                 }
                 client.connection.send_data();
@@ -70,8 +75,8 @@ pub fn start_manager() {
     }
 
     for c in clients.iter() {
-        tokenmanager.free_token(c.fifo.get_token());
-        c.fifo.cleanup();
+        tokenmanager.free_token(c.sendfifo.get_token());
+        c.sendfifo.cleanup();
     }
     tokenmanager.free_token(control_fifo.get_token());
     control_fifo.cleanup();
@@ -95,17 +100,21 @@ fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
 
     // create client FIFO
     let pidstr = fields.get(2).unwrap();
-    let mut fifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr;
+    let mut sendfifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr + "-send";
+    let mut recvfifoname = String::from(QCM_CLIENT_FIFO) + "-" + pidstr + "-recv";
+
 
     // The NUL terminator in string from FIFO seems to cause problems, remove it
-    fifoname = fifoname.replace("\0", "");
-    let fifo = Fifo::connect(fifoname.as_str(), tokenmanager.allocate_token()).unwrap();
+    sendfifoname = sendfifoname.replace("\0", "");
+    recvfifoname = recvfifoname.replace("\0", "");
+    let fifo = Fifo::connect(sendfifoname.as_str(), tokenmanager.allocate_token()).unwrap();
     poll.registry()
         .register(&mut SourceFd(&fifo.get_fd()), fifo.get_token(), Interest::READABLE)
         .unwrap();
 
     let client = Client{
-        fifo: fifo,
+        sendfifo: fifo,
+        recvfifo: Fifo::connect(&recvfifoname.as_str(), tokenmanager.allocate_token()).unwrap(),
         connection: Connection::new(address, tokenmanager, poll),
         established: false,
      };
