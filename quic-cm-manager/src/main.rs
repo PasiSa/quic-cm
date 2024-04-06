@@ -9,6 +9,7 @@ fn main() {
     start_manager();
 }
 
+mod client;
 mod connection;
 mod manager;
 mod mio_tokens;

@@ -158,32 +158,6 @@ impl Connection {
     }
 
 
-    pub fn send_from_fifo(&mut self, fifo: &mut Fifo) -> Result<usize, String> {
-        let mut buf = [0; 65535];
-        let n = match fifo.read(&mut buf) {
-            Ok(n) => n,
-            Err(e) => {
-                error!("Read from fifo failed: {}", e);
-                return Err(format!("Read from fifo failed: {}", e));
-            },
-        };
-        // TODO: check that the FIFO command is indeed "SEND". Develop decent parser
-        // function for commands.
-        if n < 8 {
-            return Err(format!("Too short message from Fifo: {} bytes", n));
-        }
-        let written = match self.qconn.stream_send(4, &buf[8..n], false) {
-            Ok(n) => n,
-            Err(quiche::Error::Done) => 0,
-            Err(e) => {
-                return Err(format!("{} stream send failed {:?}", self.qconn.trace_id(), e));
-            },
-        };
-        debug!("send_from_fifo wrote {} bytes", written);
-        Ok(written)
-    }
-
-
     pub fn deliver_to_fifo(&mut self, fifo: &mut Fifo) -> Result<usize, String> {
         // TODO: take stream ID as an attribute
         let mut n = 0;
@@ -213,6 +187,19 @@ impl Connection {
 
     pub fn get_state(&self) -> &State {
         &self.state
+    }
+
+
+    pub fn send(&mut self, stream_id: u64, buf: &[u8]) -> Result<usize, String> {
+        let written = match self.qconn.stream_send(stream_id, &buf, false) {
+            Ok(n) => n,
+            Err(quiche::Error::Done) => 0,
+            Err(e) => {
+                return Err(format!("{} stream send failed {:?}", self.qconn.trace_id(), e));
+            },
+        };
+        debug!("send_from_fifo wrote {} bytes to stream {}", written, stream_id);
+        Ok(written)
     }
 
 
