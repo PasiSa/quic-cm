@@ -1,9 +1,13 @@
-use std::collections::HashMap;
-use std::net::ToSocketAddrs;
+use std::{
+    collections::HashMap,
+    net::ToSocketAddrs,
+};
 
-use mio::{Interest, Poll, Token};
-use mio::net::UdpSocket;
-use quic_cm_lib::fifo::Fifo;
+use mio::{
+    {Interest, Poll, Token},
+    net::UdpSocket,
+};
+
 use ring::rand::*;
 use quiche::Config;
 
@@ -158,25 +162,10 @@ impl Connection {
     }
 
 
-    pub fn deliver_to_fifo(&mut self, fifo: &mut Fifo) -> Result<usize, String> {
-        // TODO: take stream ID as an attribute
-        let mut n = 0;
-        for stream in self.received_data.keys() {
-            let data = self.received_data.get(stream).unwrap();
-            let len: u32 = match self.received_data.len().try_into() {
-                Ok(v) => v,
-                Err(e) => return Err(format!("length conversion failed: {:?}", e)),
-            };
-            let header = fifo.write_data_header(len);
-            if header.is_err() {
-                return Err(format!("Writing header to Fifo failed: {}", header.err().unwrap()))
-            }
-            n = n + match fifo.write(&data) {
-                Ok(n) => n,
-                Err(e) => return Err(format!("Delivering to Fifo failed: {}", e)),
-            };
-        }
-        Ok(n)
+    pub fn peek_data(&self, stream_id: &u64) -> Option<&Vec<u8>> {
+        self.received_data.get(stream_id)
+        // TODO: handle partial write
+        // TODO: remove the data that was written (probably separate function)
     }
 
 
@@ -198,7 +187,7 @@ impl Connection {
                 return Err(format!("{} stream send failed {:?}", self.qconn.trace_id(), e));
             },
         };
-        debug!("send_from_fifo wrote {} bytes to stream {}", written, stream_id);
+        debug!("send wrote {} bytes to stream {}", written, stream_id);
         Ok(written)
     }
 

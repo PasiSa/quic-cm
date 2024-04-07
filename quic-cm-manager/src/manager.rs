@@ -1,11 +1,19 @@
-use mio::{Interest, Poll};
-use mio::unix::SourceFd;
+use std::{
+    fs::remove_file,
+    io::Read,
+    os::{
+        fd::AsRawFd,
+        unix::net::UnixListener,
+    },
+};
+
+use mio::{
+    {Interest, Poll},
+    unix::SourceFd,
+};
 use mio_signals::{Signals, SignalSet, Signal};
 
-use quic_cm_lib::{
-    common::QCM_CONTROL_FIFO,
-    fifo::Fifo
-};
+use quic_cm_lib::common::QCM_CONTROL_SOCKET;
 
 use crate::{
     client::Client,
@@ -15,8 +23,6 @@ use crate::{
 
 pub fn start_manager() {
     let mut tokenmanager: TokenManager = TokenManager::new();
-    let mut control_fifo = Fifo::new(QCM_CONTROL_FIFO, tokenmanager.allocate_token())
-        .unwrap();
     let mut clients: Vec<Client> = Vec::new();
     let mut events = mio::Events::with_capacity(1024);
     let mut poll = mio::Poll::new().unwrap();
@@ -24,9 +30,13 @@ pub fn start_manager() {
     let mut signals = Signals::new(sigset).unwrap();
     let signal_token = tokenmanager.allocate_token();
 
+    let controlsocket = UnixListener::bind(QCM_CONTROL_SOCKET)
+        .unwrap();
+    let controltoken = tokenmanager.allocate_token();
+
     poll.registry()
-        .register(&mut SourceFd(&control_fifo.get_fd()),
-                control_fifo.get_token(), Interest::READABLE)
+        .register(&mut SourceFd(&controlsocket.as_raw_fd()),
+                controltoken, Interest::READABLE)
         .unwrap();
 
     poll.registry()
@@ -41,12 +51,21 @@ pub fn start_manager() {
                 debug!("Signal received");
                 terminate = true;
             }
-            if event.token() == control_fifo.get_token() {
-                process_control_fifo(&mut control_fifo, &mut clients,
+            if event.token() == controltoken {
+                accept_incoming(&controlsocket, &mut clients,
                                     &mut tokenmanager, &mut poll);
             }
-            for client in &mut clients {
-                client.process_events(event).unwrap();
+            let mut leaving: Vec<usize> = Vec::new();
+            for (index, client) in clients.iter_mut().enumerate() {
+                if !client.process_events(event).unwrap() {
+                    info!("Client leaving");
+                    client.cleanup(&mut tokenmanager);
+                    // TODO: close connection
+                    leaving.push(index);
+                }
+            }
+            for index in leaving {
+                clients.remove(index);
             }
         }
     }
@@ -54,28 +73,30 @@ pub fn start_manager() {
     for c in clients.iter() {
         c.cleanup(&mut tokenmanager);
     }
-    tokenmanager.free_token(control_fifo.get_token());
-    control_fifo.cleanup();
+    tokenmanager.free_token(controltoken);
+    remove_file(QCM_CONTROL_SOCKET).unwrap();
 }
 
 
-/// Control fifo contains messages from clients. Nothing is sent to other direction.
-/// Messages are of form "CONN address_string process ID".
-/// As a result, a client-specific FIFO is created, and QUIC connection is created
-/// Outcome is reported back in client-specific FIFO.
-fn process_control_fifo(fifo: &mut Fifo, clients: &mut Vec<Client>,
-                        tokenmanager: &mut TokenManager, poll: &mut Poll) {
-    let mut buf = [0; 65535];
-    fifo.read(&mut buf).unwrap();
+fn accept_incoming(listener: &UnixListener, clients: &mut Vec<Client>,
+    tokenmanager: &mut TokenManager, poll: &mut Poll)
+{
+    let mut buf = [0; 2048];
+    let (mut socket,_) = listener.accept().unwrap();
+    let token = tokenmanager.allocate_token();
+
+    socket.read(&mut buf).unwrap();
     let str = std::str::from_utf8(&buf).unwrap();
-    debug!("Read: '{}'", str);
+    debug!("accept -- read: '{}'", str);
+
+    // TODO: Properly parse the CONN message in common function
     let fields: Vec<&str> = str.split_whitespace().collect();
     let address = fields.get(1).unwrap();
 
-    // TODO: error handling
+    poll.registry()
+        .register(&mut SourceFd(&socket.as_raw_fd()),
+            token, Interest::READABLE)
+        .unwrap();
 
-    // create client FIFO
-    let pidstr = fields.get(2).unwrap();
-    let client = Client::new(address, pidstr, tokenmanager, poll);
-    clients.push(client);
+    clients.push( Client::new(address, socket, token, tokenmanager, poll ));
 }
