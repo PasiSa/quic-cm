@@ -193,6 +193,7 @@ impl Connection {
                     Ok(n) => {
                         if n == 0 {
                             info!("Client leaving");
+                            // TODO: close stream
                             client.cleanup(tokenmanager);
                             leaving.push(*stream_id);
                         } else {
@@ -223,10 +224,16 @@ impl Connection {
             .unwrap();
 
         let stream_id: u64 = self.next_stream_id;
+        debug!("add_client, stream ID: {}", stream_id);
         self.next_stream_id += 4;
+        let mut client = Client::new(socket, token);
+        if let State::Established = self.state {
+            client.send_ok();
+        }
         self.clients.insert(
             stream_id,
-            Client::new(socket, token));
+            client
+        );
     }
 
 
@@ -247,29 +254,35 @@ impl Connection {
 
     fn handle_established(&mut self) {
         let mut buf = [0; 65535];
-    
+
         // Process all readable streams.
-        for stream in self.qconn.readable() {
+        for stream_id in self.qconn.readable() {
             while let Ok((read, fin)) =
-                self.qconn.stream_recv(stream, &mut buf)
+                self.qconn.stream_recv(stream_id, &mut buf)
             {
                 let stream_buf = &buf[..read];
                 debug!(
                     "{} stream {} has {} bytes (fin? {})",
                     self.qconn.trace_id(),
-                    stream,
+                    stream_id,
                     stream_buf.len(),
                     fin
                 );
 
-                if !self.received_data.contains_key(&stream) {
-                    self.received_data.insert(stream, Vec::new());
+                if !self.received_data.contains_key(&stream_id) {
+                    self.received_data.insert(stream_id, Vec::new());
                 }
-                let v = self.received_data.get_mut(&stream).unwrap();
+                let v = self.received_data.get_mut(&stream_id).unwrap();
                 v.append(&mut stream_buf.to_vec());
             }
-            let client = self.clients.get_mut(&stream).unwrap();
-            client.deliver_data(self.received_data.get(&stream).unwrap());
+            match self.clients.get_mut(&stream_id) {
+                Some(client) => {
+                    client.deliver_data(self.received_data.get(&stream_id).unwrap());
+                },
+                None => {
+                    info!("Could not find client for stream {}", stream_id);
+                },
+            };
             // TODO: remove processed data from connection
         }
     }
