@@ -1,17 +1,21 @@
 use std::{
     collections::HashMap,
-    net::ToSocketAddrs,
+    net::ToSocketAddrs, os::unix::net::UnixStream,
+    os::fd::AsRawFd,
 };
-
 use mio::{
     {Interest, Poll, Token},
+    event::Event,
     net::UdpSocket,
+    unix::SourceFd,
 };
-
 use ring::rand::*;
 use quiche::Config;
 
-use crate::mio_tokens::TokenManager;
+use crate::{
+    client::Client,
+    mio_tokens::TokenManager,
+};
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
@@ -23,15 +27,21 @@ pub enum State {
 
 pub struct Connection {
     socket: UdpSocket,
-    mio_token: Token,
+    token: Token,
     qconn: quiche::Connection,
     state: State,
     received_data: HashMap<u64, Vec<u8>>,
+    clients: HashMap<u64, Client>,
+    next_stream_id: u64,
 }
 
 impl Connection {
 
-    pub fn new(address: &str, tokenmanager: &mut TokenManager, poll: &mut Poll) -> Connection {
+    pub fn new(
+        address: &str,
+        tokenmanager: &mut TokenManager,
+        poll: &mut Poll,
+    ) -> Connection {
         // TODO: get rid of unwrap and iterate all addresses properly
         let addr = address.to_socket_addrs().unwrap().next().unwrap();
         let bind_addr = match addr {
@@ -78,10 +88,12 @@ impl Connection {
 
         Connection{
             socket: socket,
-            mio_token: token,
+            token: token,
             qconn: conn,
             state: State::Connecting,
             received_data: HashMap::new(),
+            clients: HashMap::new(),
+            next_stream_id: 4,
         }
     }
 
@@ -128,7 +140,12 @@ impl Connection {
         }
 
         if self.qconn.is_established() {
-            self.state = State::Established;
+            if let State::Connecting = self.state {
+                self.state = State::Established;
+                for client in self.clients.values_mut() {
+                    client.send_ok();
+                }
+            }
             self.handle_established();
         }
     }
@@ -162,25 +179,61 @@ impl Connection {
     }
 
 
-    pub fn peek_data(&self, stream_id: &u64) -> Option<&Vec<u8>> {
-        self.received_data.get(stream_id)
-        // TODO: handle partial write
-        // TODO: remove the data that was written (probably separate function)
+    pub fn process_events(&mut self, event: &Event, tokenmanager: &mut TokenManager) -> Result<(), String> {
+        if event.token() == self.token {
+            // TODO: error handling
+            self.process_datagram();
+        }
+
+        let mut leaving: Vec<u64> = Vec::new();
+        let mut writing: Vec<u64> = Vec::new();
+        for (stream_id, client) in self.clients.iter_mut() {
+            if event.token() == client.get_token() {
+                match client.process_control_msg() {
+                    Ok(n) => {
+                        if n == 0 {
+                            info!("Client leaving");
+                            client.cleanup(tokenmanager);
+                            leaving.push(*stream_id);
+                        } else {
+                            writing.push(*stream_id);
+                            // TODO: send OK response
+                            client.send_ok();
+                        }
+                    },
+                    Err(e) => return Err(format!("process client: {}", e)),
+                }
+            }
+        }
+        for c in writing {
+            self.send(c).unwrap();  // TODO: handle errors
+        }
+        for index in leaving {
+            self.clients.remove(&index);
+        }
+        self.send_data();
+        Ok(())
     }
 
 
-    pub fn get_token(&self) -> Token {
-        self.mio_token
+    pub fn add_client(&mut self, socket: UnixStream, poll: &mut Poll, token: Token) {
+        poll.registry()
+            .register(&mut SourceFd(&socket.as_raw_fd()),
+                token, Interest::READABLE)
+            .unwrap();
+
+        let stream_id: u64 = self.next_stream_id;
+        self.next_stream_id += 4;
+        self.clients.insert(
+            stream_id,
+            Client::new(socket, token));
     }
 
 
-    pub fn get_state(&self) -> &State {
-        &self.state
-    }
-
-
-    pub fn send(&mut self, stream_id: u64, buf: &[u8]) -> Result<usize, String> {
-        let written = match self.qconn.stream_send(stream_id, &buf, false) {
+    pub fn send(&mut self, stream_id: u64) -> Result<usize, String> {
+        let client = self.clients.get_mut(&stream_id).unwrap();
+        let (n, buf) = client.fetch_databuf();
+        let written = match self.qconn.stream_send(stream_id, &buf[..n], false) {
             Ok(n) => n,
             Err(quiche::Error::Done) => 0,
             Err(e) => {
@@ -215,6 +268,9 @@ impl Connection {
                 let v = self.received_data.get_mut(&stream).unwrap();
                 v.append(&mut stream_buf.to_vec());
             }
+            let client = self.clients.get_mut(&stream).unwrap();
+            client.deliver_data(self.received_data.get(&stream).unwrap());
+            // TODO: remove processed data from connection
         }
     }
 }

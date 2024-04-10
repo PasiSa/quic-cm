@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::remove_file,
     io::Read,
     os::{
@@ -16,14 +17,14 @@ use mio_signals::{Signals, SignalSet, Signal};
 use quic_cm_lib::common::QCM_CONTROL_SOCKET;
 
 use crate::{
-    client::Client,
-    mio_tokens::TokenManager
+    connection::Connection,
+    mio_tokens::TokenManager,
 };
 
 
 pub fn start_manager() {
     let mut tokenmanager: TokenManager = TokenManager::new();
-    let mut clients: Vec<Client> = Vec::new();
+    let mut connections: HashMap<String, Connection> = HashMap::new();
     let mut events = mio::Events::with_capacity(1024);
     let mut poll = mio::Poll::new().unwrap();
     let sigset: SignalSet = Signal::Interrupt | Signal::Terminate;
@@ -52,35 +53,30 @@ pub fn start_manager() {
                 terminate = true;
             }
             if event.token() == controltoken {
-                accept_incoming(&controlsocket, &mut clients,
-                                    &mut tokenmanager, &mut poll);
+                accept_incoming(&controlsocket,
+                                    &mut tokenmanager, &mut poll, &mut connections);
             }
-            let mut leaving: Vec<usize> = Vec::new();
-            for (index, client) in clients.iter_mut().enumerate() {
-                if !client.process_events(event).unwrap() {
-                    info!("Client leaving");
-                    client.cleanup(&mut tokenmanager);
-                    // TODO: close connection
-                    leaving.push(index);
-                }
-            }
-            for index in leaving {
-                clients.remove(index);
+
+            for connection in connections.values_mut() {
+                // TODO: handle errors
+                connection.process_events(event, &mut tokenmanager).unwrap();
             }
         }
     }
 
-    for c in clients.iter() {
-        c.cleanup(&mut tokenmanager);
-    }
+    // TODO: iterate through connections and cleanup clients
+
     tokenmanager.free_token(controltoken);
     remove_file(QCM_CONTROL_SOCKET).unwrap();
 }
 
 
-fn accept_incoming(listener: &UnixListener, clients: &mut Vec<Client>,
-    tokenmanager: &mut TokenManager, poll: &mut Poll)
-{
+fn accept_incoming<'a>(
+    listener: &UnixListener,
+    tokenmanager: &mut TokenManager,
+    poll: &mut Poll,
+    connections: &'a mut HashMap<String, Connection>,
+) {
     let mut buf = [0; 2048];
     let (mut socket,_) = listener.accept().unwrap();
     let token = tokenmanager.allocate_token();
@@ -93,10 +89,14 @@ fn accept_incoming(listener: &UnixListener, clients: &mut Vec<Client>,
     let fields: Vec<&str> = str.split_whitespace().collect();
     let address = fields.get(1).unwrap();
 
-    poll.registry()
-        .register(&mut SourceFd(&socket.as_raw_fd()),
-            token, Interest::READABLE)
-        .unwrap();
+    if !connections.contains_key(&String::from(*address)) {
+        connections.insert(
+            String::from(*address), 
+            Connection::new(address, tokenmanager, poll)
+        );
+    }
+    let connection = connections.get_mut(&String::from(*address)).unwrap();
 
-    clients.push( Client::new(address, socket, token, tokenmanager, poll ));
+    connection.add_client(socket, poll, token);
+
 }

@@ -3,77 +3,36 @@ use std::{
     os::unix::net::UnixStream,
 };
 
-use mio::{
-    {Poll, Token},
-    event::Event,
-};
+use mio::Token;
+use quic_cm_lib::common::write_data_header;
 
-use crate::{
-    connection::{Connection, State},
-    mio_tokens::TokenManager,
-};
+use crate::mio_tokens::TokenManager;
 
 pub struct Client {
     socket: UnixStream,
     token: Token,
-    connection: Connection,
-    established: bool,
-    stream_id: u64,
+    readbuf: [u8; 65535],
+    readn: usize,
 }
 
 
 impl Client {
     pub fn new(
-        address: &str,
         socket: UnixStream,
-        controltoken: Token,
-        tokenmanager: &mut TokenManager,
-        poll: &mut Poll
+        token: Token,
     ) -> Client {
         Client {
             socket,
-            token: controltoken,
-            connection: Connection::new(address, tokenmanager, poll),
-            established: false,
-            stream_id: 4,
+            token,
+            readbuf: [0; 65535],
+            readn: 0,
         }
     }
 
 
-    /// Process I/O events from client. Returns false if client has disconnected,
-    /// otherwise true.
-    pub fn process_events(&mut self, event: &Event) -> Result<bool, String> {
-        if event.token() == self.token {
-            //debug!("Data to be sent from Fifo");
-            let n = match self.process_control_msg() {
-                Ok(n) => n,
-                Err(e) => return Err(e),
-            };
-            if n == 0 {
-                return Ok(false);
-            }
-            let ok = *b"OK"; // TODO: send proper response
-            self.socket.write(&ok).unwrap(); // TODO: fix error handling
-        }
-
-        if event.token() == self.connection.get_token() {
-            // TODO: error handling
-            self.connection.process_datagram();
-            // TODO: specify which streams we are interested in
-            if self.established {
-                self.deliver_data();
-            }
-        }
-        if let State::Established = self.connection.get_state() {
-            if !self.established {
-                // Inform client that connection has just been established.
-                self.established = true;
-                let ok = *b"OK";
-                self.socket.write(&ok).unwrap();
-            }
-        }
-        self.connection.send_data();
-        Ok(true)
+    pub fn send_ok(&mut self) {
+        let ok = *b"OK";
+        self.socket.write(&ok).unwrap();
     }
 
 
@@ -82,22 +41,24 @@ impl Client {
     }
 
 
-    fn deliver_data(&mut self) {
-        let data = self.connection.peek_data(&self.stream_id);
-        if data.is_none() {
-            return;
-        }
-        let _n = self.socket.write(&data.unwrap()).unwrap();
+    pub fn deliver_data(&mut self, data: &Vec<u8>) {
+        let len: u32 = data.len().try_into().unwrap();
+        write_data_header(&mut self.socket, len).unwrap();
+        let _n = self.socket.write(&data).unwrap();
         // TODO: error handling
         // TODO: remove processed data from connection
+    }
+
+
+    pub fn get_token(&self) -> Token {
+        self.token
     }
 
 
     /// Process control message from Unix domain socket.
     /// Returns number of bytes sent forward, or 0 if the Unix socket is closed
     /// (most likely because the client application has terminated).
-    fn process_control_msg(&mut self) -> Result<usize, String> {
-        let mut buf = [0; 65535];
+   pub fn process_control_msg(&mut self) -> Result<usize, String> {
         let mut cmd: [u8; 4] = [0; 4];
         let n = match self.socket.read(&mut cmd) {
             Ok(n) => n,
@@ -130,17 +91,24 @@ impl Client {
                     return Err(format!("Could not read command from Fifo: {} bytes", n));
                 }
 
-                let n = match self.socket.read(&mut buf) {
+                self.readn = match self.socket.read(&mut self.readbuf) {
                     Ok(n) => n,
                     Err(e) => {
                         error!("Read from fifo failed: {}", e);
                         return Err(format!("Read from fifo failed: {}", e));
                     },
                 };
-                debug!("Read {} bytes from control socket", n);
-                self.connection.send(self.stream_id, &buf[..n])
+                debug!("Read {} bytes from control socket", self.readn);
+                Ok(self.readn)
             },
             _ => Err(format!("Unknown command: {}", cmdstr)),
         }
+    }
+
+
+    pub fn fetch_databuf(&mut self) -> (usize, &[u8]) {
+        let n = self.readn;
+        self.readn = 0;
+        (n, &self.readbuf)
     }
 }
