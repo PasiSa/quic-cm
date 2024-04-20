@@ -31,7 +31,7 @@ pub struct Connection {
     qconn: quiche::Connection,
     state: State,
     received_data: HashMap<u64, Vec<u8>>,
-    clients: HashMap<u64, Client>,
+    clients: HashMap<u64, Client>,  // Key is QUIC stream ID
     next_stream_id: u64,
 }
 
@@ -268,6 +268,7 @@ impl Connection {
                     stream_buf.len(),
                     fin
                 );
+                println!("Received: {}", String::from_utf8(stream_buf.to_vec()).unwrap());
 
                 if !self.received_data.contains_key(&stream_id) {
                     self.received_data.insert(stream_id, Vec::new());
@@ -277,7 +278,15 @@ impl Connection {
             }
             match self.clients.get_mut(&stream_id) {
                 Some(client) => {
-                    client.deliver_data(self.received_data.get(&stream_id).unwrap());
+                    let v = self.received_data.get_mut(&stream_id).unwrap();
+                    match client.deliver_data(v) {
+                        Ok(n) => {
+                            v.drain(0..n);
+                        },
+                        Err(e) => {
+                            error!("Got error delivering to client: {}", e);
+                        },
+                    };
                 },
                 None => {
                     info!("Could not find client for stream {}", stream_id);

@@ -4,7 +4,7 @@ use std::{
 };
 
 use mio::Token;
-use quic_cm_lib::common::write_data_header;
+use quic_cm_lib::common::write_data_header_sync;
 
 use crate::mio_tokens::TokenManager;
 
@@ -41,12 +41,13 @@ impl Client {
     }
 
 
-    pub fn deliver_data(&mut self, data: &Vec<u8>) {
+    pub fn deliver_data(&mut self, data: &Vec<u8>) -> Result<usize, String> {
         let len: u32 = data.len().try_into().unwrap();
-        write_data_header(&mut self.socket, len).unwrap();
-        let _n = self.socket.write(&data).unwrap();
-        // TODO: error handling
-        // TODO: remove processed data from connection
+        write_data_header_sync(&mut self.socket, len).unwrap();
+        match self.socket.write(&data) {
+            Ok(n) => Ok(n),
+            Err(e) => Err(format!("Writing to client Unix socket failed: {}", e)),
+        }
     }
 
 
