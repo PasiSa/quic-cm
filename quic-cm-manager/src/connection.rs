@@ -4,10 +4,12 @@ use std::{
     os::fd::AsRawFd,
 };
 use mio::{
-    {Interest, Poll, Token},
     event::Event,
     net::UdpSocket,
     unix::SourceFd,
+    Interest,
+    Poll,
+    Token,
 };
 use ring::rand::*;
 use quiche::Config;
@@ -25,6 +27,8 @@ pub enum State {
     Closed,
 }
 
+/// QUIC connection to a server destination. There are separate QUIC-CM clients for
+/// each stream opened with the server.
 pub struct Connection {
     socket: UdpSocket,
     token: Token,
@@ -41,9 +45,11 @@ impl Connection {
         address: &str,
         tokenmanager: &mut TokenManager,
         poll: &mut Poll,
-    ) -> Connection {
-        // TODO: get rid of unwrap and iterate all addresses properly
-        let addr = address.to_socket_addrs().unwrap().next().unwrap();
+    ) -> Result<Connection, String> {
+        let addr = match Self::resolve_address(address) {
+            Ok(addr) => addr,
+            Err(e) => { return Err(e); },
+        };
         let bind_addr = match addr {
             std::net::SocketAddr::V4(_) => "0.0.0.0:0",
             std::net::SocketAddr::V6(_) => "[::]:0",
@@ -86,7 +92,7 @@ impl Connection {
             .register(&mut socket, token, Interest::READABLE)
             .unwrap();
 
-        Connection{
+        Ok(Connection {
             socket: socket,
             token: token,
             qconn: conn,
@@ -94,6 +100,26 @@ impl Connection {
             received_data: HashMap::new(),
             clients: HashMap::new(),
             next_stream_id: 4,
+        })
+    }
+
+
+    fn resolve_address(address: &str) -> Result<std::net::SocketAddr, String> {
+        let mut addrs = match address.to_socket_addrs() {
+            Ok(addrs) => {
+                addrs
+            },
+            Err(e) => {
+                return Err(format!("Error resolving address '{}': {}", address, e));
+            }
+        };
+        // TODO: needs to be redesigned. Need to check if first datagram is acknowledged,
+        // and rotate to new if not.
+        // For now only IPv4 addresses are therefore accepted. Fix later.
+        let addr = addrs.find(|&x| x.is_ipv4());
+        match addr {
+            Some(a) => Ok(a),
+            None => Err(format!("Could not find acceptable address for: {}", address))
         }
     }
 

@@ -8,6 +8,11 @@ use quic_cm_lib::common::write_data_header_sync;
 
 use crate::mio_tokens::TokenManager;
 
+
+/// QUIC-CM client is a Unix domain stream socket endpoint that the actual client
+/// application uses to connect QUIC-CM. Each client corresponds to one stream
+/// in a QUIC connection to a server. QUIC-CM library is available for the client
+/// implementations on operating with the QUIC connection and Unix domain socket.
 pub struct Client {
     socket: UnixStream,
     token: Token,

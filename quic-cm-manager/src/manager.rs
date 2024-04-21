@@ -92,7 +92,7 @@ fn accept_incoming<'a>(
     if !connections.contains_key(&String::from(*address)) {
         connections.insert(
             String::from(*address), 
-            Connection::new(address, tokenmanager, poll)
+            Connection::new(address, tokenmanager, poll).unwrap(),
         );
     }
     let connection = connections.get_mut(&String::from(*address)).unwrap();
