@@ -9,9 +9,10 @@ default-run = "quic-cm-manager"
 [dependencies]
 env_logger = "0.11"
 log = "0.4"
+# mio-signals does not seem to support newer mio versions
 mio = { version = "0.8", features = ["net", "os-poll", "os-ext"] }
 mio-signals = "0.2"
-nix = "0.28"
-quiche = { version = "0.20.1", features = ["qlog"] }
+nix = "0.29"
+quiche = { version = "0.22", features = ["qlog"] }
 ring = "0.17"
 quic-cm-lib = { path = "../quic-cm-lib" }
