@@ -11,3 +11,8 @@ log = "0.4"
 mio = { version = "0.8", features = ["net", "os-poll", "os-ext"] }
 nix = { version = "0.28", features = ["fs"] }
 tokio = { version = "1.37", features = ["full"] }
+
+[dev-dependencies]
+ring = "0.17.8"
+quiche = { version = "0.20.1", features = ["qlog"] }
+mio-signals = "0.2"
