@@ -15,4 +15,4 @@ mio-signals = "0.2"
 nix = "0.29"
 quiche = { version = "0.22", features = ["qlog"] }
 ring = "0.17"
-quic-cm-lib = { path = "../quic-cm-lib" }
+quic-cm = { path = "../quic-cm-lib" }

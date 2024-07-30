@@ -10,7 +10,7 @@ use std::{
 };
 
 use tokio::time::sleep;
-use quic_cm_lib::QuicClient;
+use quic_cm::QuicClient;
 
 mod server;
 use crate::server::server;

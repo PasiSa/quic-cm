@@ -1,3 +1,13 @@
+//! # QUIC congestion manager
+//! 
+//! QUIC connection manager allows separate processes that share the same
+//! destination to join same QUIC connection, using different streams within the
+//! connection. Typical use case could be a command line tool such as _ssh_, where
+//! one often has multiple sessions open to the same server, or file transfers using
+//! tools such as _curl_. This way these different instances to same destination can
+//! share the same connection context, particularly congestion control state, and do
+//! not need separate handshake every time.
+
 #[macro_use]
 extern crate log;
 
@@ -7,13 +17,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::common::{QCM_CONTROL_SOCKET, write_data_header};
 
 
+/// Represents a client QUIC connections from an application.
 pub struct QuicClient {
     socket: UnixStream,
 }
 
 impl QuicClient {
 
-    /// Initiate QUIC connection to given address
+    /// Initiate QUIC connection to given address.
+    /// 
+    /// Address string is of form `<address>:<port>`. Address can be IP address or
+    /// DNS name. Port can be omitted, in which case default port 7878 is used.
+    /// `app_proto` specifies the application protocol given in QUIC configuration.
+    /// Server must have the same protocol identifier configured. 
     pub async fn connect(address: &str, app_proto: &str) -> Result<QuicClient, String> {
         let mut socket = match UnixStream::connect(QCM_CONTROL_SOCKET).await {
             Ok(s) => s,
@@ -72,6 +88,7 @@ impl QuicClient {
     }
 
 
+    /// Read bytes from QUIC connection.
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, String> {
         let mut header: [u8; 8] = [0; 8];
         let n = self.socket.read(&mut header).await;

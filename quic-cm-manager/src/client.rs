@@ -4,7 +4,7 @@ use std::{
 };
 
 use mio::Token;
-use quic_cm_lib::common::write_data_header_sync;
+use quic_cm::common::write_data_header_sync;
 
 use crate::mio_tokens::TokenManager;
 

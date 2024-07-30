@@ -14,7 +14,7 @@ use mio::{
 };
 use mio_signals::{Signals, SignalSet, Signal};
 
-use quic_cm_lib::common::QCM_CONTROL_SOCKET;
+use quic_cm::common::QCM_CONTROL_SOCKET;
 
 use crate::{
     connection::Connection,

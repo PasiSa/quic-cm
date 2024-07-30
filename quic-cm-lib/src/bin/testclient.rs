@@ -1,4 +1,4 @@
-use quic_cm_lib::QuicClient;
+use quic_cm::QuicClient;
 
 
 #[tokio::main]
