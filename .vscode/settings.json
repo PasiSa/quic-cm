@@ -3,4 +3,5 @@
         "./quic-cm-lib/Cargo.toml",
         "./quic-cm-manager/Cargo.toml",
     ],
+    "rust-analyzer.cargo.sysroot": "discover"
 }
