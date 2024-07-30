@@ -34,16 +34,20 @@ async fn test_connection() {
     let terminate_signal = Arc::new(AtomicBool::new(false));
     let terminate_signal_clone = terminate_signal.clone();
 
+    // Ensure that the Unix socket does not exist at the start of the test.
+    let _ = remove_file("/tmp/qcm-control");
+
     let server = thread::spawn(|| {
         server(terminate_signal_clone);
     });
-    sleep(Duration::from_secs(1)).await;
 
     let manager = start_manager().await;
     sleep(Duration::from_secs(1)).await;
 
-    let client = QuicClient::connect("127.0.0.1:7878").await;
+    let client = QuicClient::connect("127.0.0.1:7878", "test").await;
     assert!(client.is_ok());
+    let client2 = QuicClient::connect("127.0.0.1:7878", "test2").await;
+    assert!(client2.is_err());
 
     stop_manager(manager).await;
     remove_file("/tmp/qcm-control").unwrap();  // TODO: terminate manager properly by signal

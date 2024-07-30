@@ -64,10 +64,10 @@ pub fn start_manager() {
         }
     }
 
-    // TODO: iterate through connections and cleanup clients
+    // TODO: iterate through connections and clean up clients
 
     tokenmanager.free_token(controltoken);
-    remove_file(QCM_CONTROL_SOCKET).unwrap();
+    let _ = remove_file(QCM_CONTROL_SOCKET);
 }
 
 
@@ -87,16 +87,22 @@ fn accept_incoming<'a>(
 
     // TODO: Properly parse the CONN message in common function
     let fields: Vec<&str> = str.split_whitespace().collect();
+    let conn = fields.get(0).unwrap();
+    if (*conn).ne("CONN") {
+        error!("Expected CONN message for incoming connection, got: {}", conn);
+        return;
+    }
     let address = fields.get(1).unwrap();
+    let app_proto = fields.get(2).unwrap();
 
     if !connections.contains_key(&String::from(*address)) {
         connections.insert(
             String::from(*address), 
-            Connection::new(address, tokenmanager, poll).unwrap(),
+            Connection::new(address, app_proto, tokenmanager, poll).unwrap(),
         );
     }
     let connection = connections.get_mut(&String::from(*address)).unwrap();
 
-    connection.add_client(socket, poll, token);
+    connection.add_client(socket, app_proto, poll, token);
 
 }

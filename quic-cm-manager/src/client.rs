@@ -41,6 +41,13 @@ impl Client {
     }
 
 
+    pub fn send_error(&mut self, message: &str) {
+        let str = String::from("ERROR ") + message;
+        let err = str.as_bytes();
+        self.socket.write(&err).unwrap();
+    }
+
+
     pub fn cleanup(&self, tokenmanager: &mut TokenManager) {
         tokenmanager.free_token(self.token);
     }
@@ -64,7 +71,7 @@ impl Client {
     /// Process control message from Unix domain socket.
     /// Returns number of bytes sent forward, or 0 if the Unix socket is closed
     /// (most likely because the client application has terminated).
-   pub fn process_control_msg(&mut self) -> Result<usize, String> {
+    pub fn process_control_msg(&mut self) -> Result<usize, String> {
         let mut cmd: [u8; 4] = [0; 4];
         let n = match self.socket.read(&mut cmd) {
             Ok(n) => n,

@@ -29,7 +29,7 @@ pub fn set_quic_config() -> Config {
     config.verify_peer(false);
 
     config.set_application_protos(&[
-            b"quiccat",
+            "test".as_bytes(),
         ]).unwrap();
 
     config.set_max_idle_timeout(50000);

@@ -4,7 +4,7 @@ use quic_cm_lib::QuicClient;
 #[tokio::main]
 async fn main() {
     env_logger::builder().format_timestamp_nanos().init();
-    let mut client = QuicClient::connect("127.0.0.1:7878").await.unwrap();
+    let mut client = QuicClient::connect("127.0.0.1:7878", "quiccat").await.unwrap();
     let bytes = *b"ABCDEF\n";
     client.write(&bytes).await.unwrap();
 

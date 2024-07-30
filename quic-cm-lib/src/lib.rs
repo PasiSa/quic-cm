@@ -14,13 +14,13 @@ pub struct QuicClient {
 impl QuicClient {
 
     /// Initiate QUIC connection to given address
-    pub async fn connect(address: &str) -> Result<QuicClient, String> {
+    pub async fn connect(address: &str, app_proto: &str) -> Result<QuicClient, String> {
         let mut socket = match UnixStream::connect(QCM_CONTROL_SOCKET).await {
             Ok(s) => s,
             Err(e) => return Err(format!("Could not open unix socket: {}", e)),
         };
 
-        let v = format!("CONN {} {}", address, 0).as_bytes().to_vec();
+        let v = format!("CONN {} {} ", address, app_proto).as_bytes().to_vec();
         let n = match socket.write(&v).await {
             Ok(n) => n,
             Err(e) => return Err(format!("Control message sending failed: {}", e)),
@@ -29,9 +29,16 @@ impl QuicClient {
 
         let mut buf = [0; 65535];
         match socket.read(&mut buf).await {
-            Ok(_) => {
-                debug!("Read: {}", std::str::from_utf8(&buf).unwrap());
-                Ok(QuicClient{ socket })
+            Ok(n) => {
+                if n == 0 {
+                    return Err(format!("Control socket closed prematurely"));
+                }
+                let bufstr = std::str::from_utf8(&buf[..n]).unwrap();
+                if bufstr.eq("OK") {
+                    Ok(QuicClient{ socket })
+                } else {
+                    return Err(format!("Received connection error: {}", bufstr));
+                }
             },
             Err(e) => {
                 return Err(format!("Reading control response failed: {}", e))

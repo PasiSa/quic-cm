@@ -31,6 +31,7 @@ pub enum State {
 /// each stream opened with the server.
 pub struct Connection {
     socket: UdpSocket,
+    app_proto: String,
     token: Token,
     qconn: quiche::Connection,
     state: State,
@@ -43,6 +44,7 @@ impl Connection {
 
     pub fn new(
         address: &str,
+        app_proto: &str,
         tokenmanager: &mut TokenManager,
         poll: &mut Poll,
     ) -> Result<Connection, String> {
@@ -61,11 +63,11 @@ impl Connection {
         SystemRandom::new().fill(&mut scid[..]).unwrap();
         let scid = quiche::ConnectionId::from_ref(&scid);
 
-        let mut config = set_quic_config();
+        let mut config = set_quic_config(app_proto);
 
         let mut conn =
-        quiche::connect(None, &scid, local_addr, addr, &mut config)
-            .unwrap();
+            quiche::connect(None, &scid, local_addr, addr, &mut config)
+                .unwrap();
 
         debug!(
             "connecting to {:} from {:} with scid {}",
@@ -94,6 +96,7 @@ impl Connection {
 
         Ok(Connection {
             socket: socket,
+            app_proto: app_proto.to_string(),
             token: token,
             qconn: conn,
             state: State::Connecting,
@@ -163,6 +166,13 @@ impl Connection {
             self.state = State::Closed;
             debug!("connection closed, {:?}", self.qconn.stats());
             return;
+        }
+
+        if self.qconn.peer_error().is_some() {
+            error!("Error occurred when establishing connection");
+            for client in self.clients.values_mut() {
+                client.send_error("Error occurred when establishing connection");
+            }
         }
 
         if self.qconn.is_established() {
@@ -243,7 +253,15 @@ impl Connection {
     }
 
 
-    pub fn add_client(&mut self, socket: UnixStream, poll: &mut Poll, token: Token) {
+    pub fn add_client(&mut self, socket: UnixStream, app_proto: &str, poll: &mut Poll, token: Token) {
+        // check that app_proto matches with earlier made connectiom
+        if app_proto.ne(&self.app_proto) {
+                error!("Application proto from new client does not match connection.");
+                let mut client = Client::new(socket, token);
+                client.send_error("Application proto does not match with connection.");
+                return;
+        }
+
         poll.registry()
             .register(&mut SourceFd(&socket.as_raw_fd()),
                 token, Interest::READABLE)
@@ -331,13 +349,13 @@ fn hex_dump(buf: &[u8]) -> String {
 }
 
 
-fn set_quic_config() -> Config {
+fn set_quic_config(appname: &str) -> Config {
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
 
     config.verify_peer(false);
 
     config.set_application_protos(&[
-            b"quiccat",
+            appname.as_bytes(),
         ]).unwrap();
 
     config.set_max_idle_timeout(50000);
