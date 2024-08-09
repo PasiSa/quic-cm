@@ -48,6 +48,16 @@ impl Client {
     }
 
 
+    /// Send error to a particular socket, and produce a log error.
+    /// Can be used when Client instance is not available,
+    pub fn send_socket_error(socket: &mut UnixStream, message: &str) {
+        error!("{}", message);
+        let str = String::from("ERROR ") + message;
+        let err = str.as_bytes();
+        socket.write(&err).unwrap();
+    }
+
+
     pub fn cleanup(&self, tokenmanager: &mut TokenManager) {
         tokenmanager.free_token(self.token);
     }

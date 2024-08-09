@@ -256,9 +256,11 @@ impl Connection {
     pub fn add_client(&mut self, socket: UnixStream, app_proto: &str, poll: &mut Poll, token: Token) {
         // check that app_proto matches with earlier made connectiom
         if app_proto.ne(&self.app_proto) {
-                error!("Application proto from new client does not match connection.");
-                let mut client = Client::new(socket, token);
-                client.send_error("Application proto does not match with connection.");
+                let mut mutsock = socket;
+                Client::send_socket_error(
+                    &mut mutsock,
+                    format!("Application proto from new client does not match connection.").as_str()
+                );
                 return;
         }
 

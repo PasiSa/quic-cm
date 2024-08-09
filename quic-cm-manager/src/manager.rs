@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::remove_file,
-    io::Read,
+    io::{Read, Write},
     os::{
         fd::AsRawFd,
         unix::net::UnixListener,
@@ -17,6 +17,7 @@ use mio_signals::{Signals, SignalSet, Signal};
 use quic_cm::common::QCM_CONTROL_SOCKET;
 
 use crate::{
+    client::Client,
     connection::Connection,
     mio_tokens::TokenManager,
 };
@@ -83,22 +84,38 @@ fn accept_incoming<'a>(
 
     socket.read(&mut buf).unwrap();
     let str = std::str::from_utf8(&buf).unwrap();
-    debug!("accept -- read: '{}'", str);
 
     // TODO: Properly parse the CONN message in common function
     let fields: Vec<&str> = str.split_whitespace().collect();
     let conn = fields.get(0).unwrap();
     if (*conn).ne("CONN") {
-        error!("Expected CONN message for incoming connection, got: {}", conn);
+        Client::send_socket_error(
+            &mut socket,
+            format!("Expected CONN message for incoming connection, got: {}", str).as_str()
+        );
+        socket.write("ERROR Expected CONN message".as_bytes()).unwrap();
+        return;
+    }
+    if fields.len() < 3 {
+        Client::send_socket_error(
+            &mut socket, format!("Malformed CONN message: {}", str).as_str());
         return;
     }
     let address = fields.get(1).unwrap();
     let app_proto = fields.get(2).unwrap();
 
     if !connections.contains_key(&String::from(*address)) {
+        let conn = match Connection::new(address, app_proto, tokenmanager, poll) {
+            Ok(c) => c,
+            Err(e) => {
+                Client::send_socket_error(
+                    &mut socket, format!("Connection creation failed: {e}").as_str());
+                return;
+            }
+        };
         connections.insert(
             String::from(*address), 
-            Connection::new(address, app_proto, tokenmanager, poll).unwrap(),
+            conn,
         );
     }
     let connection = connections.get_mut(&String::from(*address)).unwrap();
