@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     net::ToSocketAddrs, os::unix::net::UnixStream,
     os::fd::AsRawFd,
+    time::Duration,
 };
 use mio::{
     event::Event,
@@ -107,26 +108,6 @@ impl Connection {
     }
 
 
-    fn resolve_address(address: &str) -> Result<std::net::SocketAddr, String> {
-        let mut addrs = match address.to_socket_addrs() {
-            Ok(addrs) => {
-                addrs
-            },
-            Err(e) => {
-                return Err(format!("Error resolving address '{}': {}", address, e));
-            }
-        };
-        // TODO: needs to be redesigned. Need to check if first datagram is acknowledged,
-        // and rotate to new if not.
-        // For now only IPv4 addresses are therefore accepted. Fix later.
-        let addr = addrs.find(|&x| x.is_ipv4());
-        match addr {
-            Some(a) => Ok(a),
-            None => Err(format!("Could not find acceptable address for: {}", address))
-        }
-    }
-
-
     pub fn process_datagram(&mut self) {
         // TODO: error handling
         let mut buf = [0; 65535];
@@ -187,67 +168,52 @@ impl Connection {
     }
 
 
-    pub fn send_data(&mut self) {
-        let mut out = [0; MAX_DATAGRAM_SIZE];
-
-        // Generate outgoing QUIC packets and send them on the UDP socket, until
-        // quiche reports that there are no more packets to be sent.
-        loop {
-            let (write, send_info) = match self.qconn.send(&mut out) {
-                Ok(v) => v,
-                Err(quiche::Error::Done) => break,
-                Err(e) => {
-                    error!("send failed: {:?}", e);
-
-                    self.qconn.close(false, 0x1, b"fail").ok();
-                    break;
-                },
-            };
-            if let Err(e) = self.socket.send_to(&out[..write], send_info.to) {
-                if e.kind() == std::io::ErrorKind::WouldBlock {
-                    break;
-                }
-                panic!("send() failed: {:?}", e);
+    /// Process MIO events. If event is None, timeout has occurred.
+    pub fn process_events(&mut self, event: Option<&Event>, tokenmanager: &mut TokenManager) -> Result<(), String> {
+        if event.is_some() {
+            if event.unwrap().token() == self.token {
+                // TODO: error handling
+                self.process_datagram();
             }
 
-            debug!("written to socket {} bytes", write);
-        }
-    }
-
-
-    pub fn process_events(&mut self, event: &Event, tokenmanager: &mut TokenManager) -> Result<(), String> {
-        if event.token() == self.token {
-            // TODO: error handling
-            self.process_datagram();
-        }
-
-        let mut leaving: Vec<u64> = Vec::new();
-        let mut writing: Vec<u64> = Vec::new();
-        for (stream_id, client) in self.clients.iter_mut() {
-            if event.token() == client.get_token() {
-                match client.process_control_msg() {
-                    Ok(n) => {
-                        if n == 0 {
-                            info!("Client leaving");
-                            // TODO: close stream
-                            client.cleanup(tokenmanager);
-                            leaving.push(*stream_id);
-                        } else {
-                            writing.push(*stream_id);
-                            // TODO: send OK response
-                            client.send_ok();
-                        }
-                    },
-                    Err(e) => return Err(format!("process client: {}", e)),
+            let mut leaving: Vec<u64> = Vec::new();
+            let mut writing: Vec<u64> = Vec::new();
+            for (stream_id, client) in self.clients.iter_mut() {
+                if event.unwrap().token() == client.get_token() {
+                    match client.process_control_msg() {
+                        Ok(n) => {
+                            if n == 0 {
+                                info!("Client leaving");
+                                // TODO: close stream
+                                client.cleanup(tokenmanager);
+                                leaving.push(*stream_id);
+                            } else {
+                                writing.push(*stream_id);
+                                // TODO: send OK response
+                                client.send_ok();
+                            }
+                        },
+                        Err(e) => return Err(format!("process client: {}", e)),
+                    }
                 }
             }
+            for c in writing {
+                self.send(c).unwrap();  // TODO: handle errors
+            }
+            for index in leaving {
+                self.clients.remove(&index);
+            }
+        } else {
+            self.qconn.on_timeout();
         }
-        for c in writing {
-            self.send(c).unwrap();  // TODO: handle errors
+
+        if self.qconn.is_closed() {
+            debug!("Connection is closed");
+            for c in self.clients.values_mut() {
+                c.send_error("Connection is closed");
+            }
         }
-        for index in leaving {
-            self.clients.remove(&index);
-        }
+
         self.send_data();
         Ok(())
     }
@@ -295,6 +261,64 @@ impl Connection {
         };
         debug!("send wrote {} bytes to stream {}", written, stream_id);
         Ok(written)
+    }
+
+
+    pub fn timeout(&self) -> Option<Duration> {
+        self.qconn.timeout()
+    }
+
+
+    pub fn is_closed(&self) -> bool {
+        self.qconn.is_closed()
+    }
+
+
+    fn resolve_address(address: &str) -> Result<std::net::SocketAddr, String> {
+        let mut addrs = match address.to_socket_addrs() {
+            Ok(addrs) => {
+                addrs
+            },
+            Err(e) => {
+                return Err(format!("Error resolving address '{}': {}", address, e));
+            }
+        };
+        // TODO: needs to be redesigned. Need to check if first datagram is acknowledged,
+        // and rotate to new if not.
+        // For now only IPv4 addresses are therefore accepted. Fix later.
+        let addr = addrs.find(|&x| x.is_ipv4());
+        match addr {
+            Some(a) => Ok(a),
+            None => Err(format!("Could not find acceptable address for: {}", address))
+        }
+    }
+
+
+    fn send_data(&mut self) {
+        let mut out = [0; MAX_DATAGRAM_SIZE];
+
+        // Generate outgoing QUIC packets and send them on the UDP socket, until
+        // quiche reports that there are no more packets to be sent.
+        loop {
+            let (write, send_info) = match self.qconn.send(&mut out) {
+                Ok(v) => v,
+                Err(quiche::Error::Done) => break,
+                Err(e) => {
+                    error!("send failed: {:?}", e);
+
+                    self.qconn.close(false, 0x1, b"fail").ok();
+                    break;
+                },
+            };
+            if let Err(e) = self.socket.send_to(&out[..write], send_info.to) {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    break;
+                }
+                panic!("send() failed: {:?}", e);
+            }
+
+            debug!("written to socket {} bytes", write);
+        }
     }
 
 

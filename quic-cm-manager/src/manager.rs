@@ -6,6 +6,7 @@ use std::{
         fd::AsRawFd,
         unix::net::UnixListener,
     },
+    time::Duration,
 };
 
 use mio::{
@@ -47,7 +48,23 @@ pub fn start_manager() {
 
     let mut terminate = false;
     while !terminate {
-        poll.poll(&mut events, None).unwrap();
+        // Set timer to connection with nearest timeout
+        let mut timeout: Option<Duration> = None;
+        for connection in connections.values() {
+            if connection.timeout().is_some() {
+                if timeout.is_none() || Some(connection.timeout()) < Some(timeout) {
+                    timeout = connection.timeout();
+                }
+            }
+        }
+
+        poll.poll(&mut events, timeout).unwrap();
+        if events.is_empty() {
+            debug!("Timeout");
+            for connection in connections.values_mut() {
+                connection.process_events(None, &mut tokenmanager).unwrap();
+            }
+        }
         for event in &events {
             if event.token() == signal_token {
                 debug!("Signal received");
@@ -60,12 +77,12 @@ pub fn start_manager() {
 
             for connection in connections.values_mut() {
                 // TODO: handle errors
-                connection.process_events(event, &mut tokenmanager).unwrap();
+                connection.process_events(Some(event), &mut tokenmanager).unwrap();
             }
         }
+        // Remove all closed connections
+        connections.retain(|_, val| !val.is_closed());
     }
-
-    // TODO: iterate through connections and clean up clients
 
     tokenmanager.free_token(controltoken);
     let _ = remove_file(QCM_CONTROL_SOCKET);

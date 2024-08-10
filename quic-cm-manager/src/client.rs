@@ -36,13 +36,13 @@ impl Client {
 
 
     pub fn send_ok(&mut self) {
-        let ok = *b"OK";
+        let ok = *b"OKOK";
         self.socket.write(&ok).unwrap();
     }
 
 
     pub fn send_error(&mut self, message: &str) {
-        let str = String::from("ERROR ") + message;
+        let str = String::from("ERRO ") + message;
         let err = str.as_bytes();
         self.socket.write(&err).unwrap();
     }

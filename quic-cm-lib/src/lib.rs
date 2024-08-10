@@ -50,7 +50,7 @@ impl QuicClient {
                     return Err(format!("Control socket closed prematurely"));
                 }
                 let bufstr = std::str::from_utf8(&buf[..n]).unwrap();
-                if bufstr.eq("OK") {
+                if bufstr.eq("OKOK") {
                     Ok(QuicClient{ socket })
                 } else {
                     return Err(format!("Received connection error: {}", bufstr));
@@ -81,10 +81,16 @@ impl QuicClient {
         };
         debug!("Wrote to Unix socket {} bytes", n);
 
-        let mut ok: [u8; 8] = [0; 8];
-        let n = self.socket.read(&mut ok).await.unwrap(); // TODO: error handling
-        debug!("Write response: {} bytes", n);
-        Ok(n)
+        let mut response: [u8; 1500] = [0; 1500];
+        let n = self.socket.read(&mut response).await.unwrap(); // TODO: error handling
+        let cmd = std::str::from_utf8(&response[0..4]).unwrap();
+        if cmd == "OKOK" {
+            Ok(n)
+        } else if cmd == "ERRO" {
+            Err(std::str::from_utf8(&response[4..]).unwrap().to_string())
+        } else {
+            Err(format!("Unknown QUIC-CM command: {}", cmd))
+        }
     }
 
 
